@@ -8069,7 +8069,7 @@ void xb_set_plugin_dir() {
 }
 
 /* ================= main =================== */
-
+/* Note:xtrabackup入口 */
 int main(int argc, char **argv) {
   char **client_defaults, **server_defaults;
   int client_argc, server_argc;

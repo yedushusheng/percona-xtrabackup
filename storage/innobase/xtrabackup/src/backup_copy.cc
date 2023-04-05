@@ -1384,20 +1384,27 @@ static bool backup_rocksdb_checkpoint(Backup_context &context, bool final) {
 /* Backup non-InnoDB data.
 @param  backup_lsn   backup LSN
 @return true if success. */
+/** Note:备份非InnoDB数据
+*/
 bool backup_start(Backup_context &context) {
+  /* Note:opt_no_lock指的是--no-lock参数 */
   if (!opt_no_lock) {
+    /** Note:调用backup_files函数备份非ibd文件,加了全局读锁还会调用一次.
+     * 这一次,实际上针对的是--rsync方式
+    */
     if (!backup_files(MySQL_datadir_path.path().c_str(), true, context)) {
       return (false);
     }
 
     history_lock_time = time(NULL);
-
+    /* Note:加全局读锁,如果支持备份锁,且没有设置--no-backup-locks,会优先使用备份锁 */
     if (!lock_tables_maybe(mysql_connection, opt_backup_lock_timeout,
                            opt_backup_lock_retry_count)) {
       return (false);
     }
   }
 
+  /* Note:备份非ibd文件 */
   if (!backup_files(MySQL_datadir_path.path().c_str(), false, context)) {
     return (false);
   }
@@ -1405,6 +1412,10 @@ bool backup_start(Backup_context &context) {
   /* There is no need to stop slave thread before copying non-Innodb data when
   --no-lock option is used because --no-lock option requires that no DDL or
   DML to non-transaction tables can occur. */
+  /** Note:如果指定了--safe-slave-backup,会关闭SQL线程,等待Slave_open_temp_tables变量为0.
+   * 如果使用的是statement格式,且使用了临时表,建议设置--safe-slave-backup.
+   * 对于row格式,无需指定该选项 
+  */  
   if (opt_no_lock && opt_safe_slave_backup) {
     if (!wait_for_safe_slave(mysql_connection)) {
       return (false);
@@ -1493,6 +1504,7 @@ bool backup_start(Backup_context &context) {
     context.myrocks_checkpoint.enable_file_deletions();
   }
 
+  /* Note:如果设置了--slave-info,会将SHOW SLAVE STATUS的相关信息,记录在xtrabackup_slave_info中 */
   if (opt_slave_info) {
     if (!write_slave_info(mysql_connection)) {
       return (false);
@@ -1512,8 +1524,12 @@ bool backup_start(Backup_context &context) {
 
 /* Finsh the backup. Release all locks. Write down backup metadata.
 @return true if success. */
+/** Note:结束备份
+ * 释放所有的锁,将元数据持久化
+*/
 bool backup_finish(Backup_context &context) {
   /* release all locks */
+  /* Note:释放所有锁,如果锁定了Binlog,还会解锁Binlog */
   if (!opt_no_lock) {
     unlock_all(mysql_connection);
     history_lock_time = time(NULL) - history_lock_time;
@@ -1521,12 +1537,14 @@ bool backup_finish(Backup_context &context) {
     history_lock_time = 0;
   }
 
+  /* Note:如果设置了--safe-slave-backup,且SQL线程停止了,会开启SQL线程 */
   if (opt_safe_slave_backup && sql_thread_started) {
     xb::info() << "Starting slave SQL thread";
     xb_mysql_query(mysql_connection, "START SLAVE SQL_THREAD", false);
   }
 
   /* Copy buffer pool dump or LRU dump */
+  /* Note:拷贝ib_buffer_pool和ib_lru_dump文件 */
   if (!opt_rsync) {
     if (opt_dump_innodb_buffer_pool) {
       check_dump_innodb_buffer_pool(mysql_connection);
@@ -1542,6 +1560,7 @@ bool backup_finish(Backup_context &context) {
     }
   }
 
+  /* Note:处理rocksdb */
   if (have_rocksdb) {
     if (!backup_rocksdb_checkpoint(context, true)) {
       return (false);
@@ -1558,10 +1577,14 @@ bool backup_finish(Backup_context &context) {
     xb::info() << "MySQL slave binlog position: "
                << mysql_slave_position.c_str();
   }
+  /* Note:生成配置文件,backup-my.cnf */
   if (!write_backup_config_file()) {
     return (false);
   }
 
+  /** Note:将备份的相关信息记录在xtrabackup_info文件中
+   * 状态的持久化
+  */
   if (!write_xtrabackup_info(mysql_connection)) {
     return (false);
   }
